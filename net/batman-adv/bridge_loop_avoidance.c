@@ -261,7 +261,8 @@ batadv_backbone_hash_find(struct batadv_priv *bat_priv, const u8 *addr,
 {
 	struct batadv_hashtable *hash = bat_priv->bla.backbone_hash;
 	struct hlist_head *head;
-	struct batadv_bla_backbone_gw search_entry, *backbone_gw;
+	struct batadv_bla_backbone_gw search_entry;
+	struct batadv_bla_backbone_gw *backbone_gw;
 	struct batadv_bla_backbone_gw *backbone_gw_tmp = NULL;
 	int index;
 
@@ -809,7 +810,8 @@ batadv_bla_claim_get_backbone_gw(struct batadv_bla_claim *claim)
 static void batadv_bla_del_claim(struct batadv_priv *bat_priv,
 				 const u8 *mac, const unsigned short vid)
 {
-	struct batadv_bla_claim search_claim, *claim;
+	struct batadv_bla_claim search_claim;
+	struct batadv_bla_claim *claim;
 	struct batadv_bla_claim *claim_removed_entry;
 	struct hlist_node *claim_removed_node;
 
@@ -851,7 +853,8 @@ static bool batadv_handle_announce(struct batadv_priv *bat_priv, u8 *an_addr,
 				   u8 *backbone_addr, unsigned short vid)
 {
 	struct batadv_bla_backbone_gw *backbone_gw;
-	u16 backbone_crc, crc;
+	u16 backbone_crc;
+	u16 crc;
 
 	if (memcmp(an_addr, batadv_announce_mac, 4) != 0)
 		return false;
@@ -1030,7 +1033,8 @@ static int batadv_check_claim_group(struct batadv_priv *bat_priv,
 {
 	u8 *backbone_addr;
 	struct batadv_orig_node *orig_node;
-	struct batadv_bla_claim_dst *bla_dst, *bla_dst_own;
+	struct batadv_bla_claim_dst *bla_dst;
+	struct batadv_bla_claim_dst *bla_dst_own;
 
 	bla_dst = (struct batadv_bla_claim_dst *)hw_dst;
 	bla_dst_own = &bat_priv->bla.claim_dest;
@@ -1099,9 +1103,12 @@ static bool batadv_bla_process_claim(struct batadv_priv *bat_priv,
 				     struct batadv_hard_iface *primary_if,
 				     struct sk_buff *skb)
 {
-	struct batadv_bla_claim_dst *bla_dst, *bla_dst_own;
-	u8 *hw_src, *hw_dst;
-	struct vlan_hdr *vhdr, vhdr_buf;
+	struct batadv_bla_claim_dst *bla_dst;
+	struct batadv_bla_claim_dst *bla_dst_own;
+	u8 *hw_src;
+	u8 *hw_dst;
+	struct vlan_hdr *vhdr;
+	struct vlan_hdr vhdr_buf;
 	struct ethhdr *ethhdr;
 	struct arphdr *arphdr;
 	unsigned short vid;
@@ -1665,7 +1672,8 @@ static bool batadv_bla_check_duplist(struct batadv_priv *bat_priv,
 	struct batadv_bcast_duplist_entry *entry;
 	bool ret = false;
 	int payload_len;
-	int i, curr;
+	int i;
+	int curr;
 	u32 crc;
 
 	/* calculate the crc ... */
@@ -1956,7 +1964,8 @@ bool batadv_bla_rx(struct batadv_priv *bat_priv, struct sk_buff *skb,
 {
 	struct batadv_bla_backbone_gw *backbone_gw;
 	struct ethhdr *ethhdr;
-	struct batadv_bla_claim search_claim, *claim = NULL;
+	struct batadv_bla_claim search_claim;
+	struct batadv_bla_claim *claim = NULL;
 	struct batadv_hard_iface *primary_if;
 	bool own_claim;
 	bool ret;
@@ -2089,7 +2098,8 @@ bool batadv_bla_tx(struct batadv_priv *bat_priv, struct sk_buff *skb,
 		   unsigned short vid)
 {
 	struct ethhdr *ethhdr;
-	struct batadv_bla_claim search_claim, *claim = NULL;
+	struct batadv_bla_claim search_claim;
+	struct batadv_bla_claim *claim = NULL;
 	struct batadv_bla_backbone_gw *backbone_gw;
 	struct batadv_hard_iface *primary_if;
 	bool client_roamed;
