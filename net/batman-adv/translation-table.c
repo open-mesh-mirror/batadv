@@ -650,6 +650,8 @@ bool batadv_tt_local_add(struct net_device *mesh_iface, const u8 *addr,
 		tt_global = batadv_tt_global_hash_find(bat_priv, addr, vid);
 
 	if (tt_local) {
+		bool readd = false;
+
 		tt_local->last_seen = jiffies;
 
 		flags = atomic_read(&tt_local->common.flags);
@@ -668,7 +670,7 @@ bool batadv_tt_local_add(struct net_device *mesh_iface, const u8 *addr,
 			batadv_dbg(BATADV_DBG_TT, bat_priv,
 				   "Re-adding pending client %pM (vid: %d)\n",
 				   addr, batadv_print_vid(vid));
-			goto add_event;
+			readd = true;
 		}
 
 		/* the ROAM flag is set because this client roamed away and the
@@ -687,6 +689,10 @@ bool batadv_tt_local_add(struct net_device *mesh_iface, const u8 *addr,
 				   addr, batadv_print_vid(vid));
 			roamed_back = true;
 		}
+
+		if (readd)
+			goto add_event;
+
 		goto check_roaming;
 	}
 
@@ -1355,17 +1361,28 @@ u16 batadv_tt_local_remove(struct batadv_priv *bat_priv, const u8 *addr,
 	 * mark the local entry as "roamed" in order to correctly reroute
 	 * packets later
 	 */
-	if (roaming) {
+	if (roaming)
 		flags |= BATADV_TT_CLIENT_ROAM;
-		/* mark the local client as ROAMed */
-		atomic_or(BATADV_TT_CLIENT_ROAM, &tt_local_entry->common.flags);
-	}
 
 	old_flags = atomic_fetch_andnot(BATADV_TT_CLIENT_NEW,
 					&tt_local_entry->common.flags);
 	if (!(old_flags & BATADV_TT_CLIENT_NEW)) {
 		batadv_tt_local_set_pending(bat_priv, tt_local_entry, flags,
 					    message);
+
+		/* mark the local client as ROAMed in order to correctly
+		 * reroute packets later. The flag is only set after the
+		 * PENDING flag and the DEL event are in place: the
+		 * modification order of the flags field guarantees that a
+		 * (lockless) ndo_start_xmit handler which observes the ROAM
+		 * flag has also observed the PENDING flag - and therefore
+		 * either claims it and queues the compensating ADD event or
+		 * another handler already did
+		 */
+		if (roaming)
+			atomic_or(BATADV_TT_CLIENT_ROAM,
+				  &tt_local_entry->common.flags);
+
 		goto out;
 	}
 	/* if this client has been added right now, it is possible to
