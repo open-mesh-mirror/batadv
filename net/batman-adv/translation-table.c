@@ -653,29 +653,38 @@ bool batadv_tt_local_add(struct net_device *mesh_iface, const u8 *addr,
 		tt_local->last_seen = jiffies;
 
 		flags = atomic_read(&tt_local->common.flags);
-		if (flags & BATADV_TT_CLIENT_PENDING) {
+
+		/* whatever the reason why the PENDING flag was set, this is a
+		 * client which was enqueued to be removed in this
+		 * orig_interval. Since it popped up again, the flag can be
+		 * reset like it was never enqueued. The flag is claimed via an
+		 * atomic test-and-clear so that only a single (lockless)
+		 * ndo_start_xmit handler queues the compensating ADD event
+		 */
+		if (flags & BATADV_TT_CLIENT_PENDING &&
+		    atomic_fetch_andnot(BATADV_TT_CLIENT_PENDING,
+					&tt_local->common.flags) &
+		    BATADV_TT_CLIENT_PENDING) {
 			batadv_dbg(BATADV_DBG_TT, bat_priv,
 				   "Re-adding pending client %pM (vid: %d)\n",
 				   addr, batadv_print_vid(vid));
-			/* whatever the reason why the PENDING flag was set,
-			 * this is a client which was enqueued to be removed in
-			 * this orig_interval. Since it popped up again, the
-			 * flag can be reset like it was never enqueued
-			 */
-			atomic_andnot(BATADV_TT_CLIENT_PENDING, &tt_local->common.flags);
 			goto add_event;
 		}
 
-		if (flags & BATADV_TT_CLIENT_ROAM) {
+		/* the ROAM flag is set because this client roamed away and the
+		 * node got a roaming_advertisement message. Now that the
+		 * client popped up again at its original location such flag
+		 * can be unset. The flag is claimed via an atomic
+		 * test-and-clear so that only a single (lockless)
+		 * ndo_start_xmit handler cancels the roaming process
+		 */
+		if (flags & BATADV_TT_CLIENT_ROAM &&
+		    atomic_fetch_andnot(BATADV_TT_CLIENT_ROAM,
+					&tt_local->common.flags) &
+		    BATADV_TT_CLIENT_ROAM) {
 			batadv_dbg(BATADV_DBG_TT, bat_priv,
 				   "Roaming client %pM (vid: %d) came back to its original location\n",
 				   addr, batadv_print_vid(vid));
-			/* the ROAM flag is set because this client roamed away
-			 * and the node got a roaming_advertisement message. Now
-			 * that the client popped up again at its original
-			 * location such flag can be unset
-			 */
-			atomic_andnot(BATADV_TT_CLIENT_ROAM, &tt_local->common.flags);
 			roamed_back = true;
 		}
 		goto check_roaming;
@@ -1295,13 +1304,18 @@ batadv_tt_local_set_pending(struct batadv_priv *bat_priv,
 			    struct batadv_tt_local_entry *tt_local_entry,
 			    u16 flags, const char *message)
 {
-	batadv_tt_local_event(bat_priv, tt_local_entry, flags);
-
 	/* The local client has to be marked as "pending to be removed" but has
 	 * to be kept in the table in order to send it in a full table
-	 * response issued before the net ttvn increment (consistency check)
+	 * response issued before the net ttvn increment (consistency check).
+	 * The flag is set before the DEL event is queued: a (lockless)
+	 * ndo_start_xmit handler which re-adds the client therefore either
+	 * observes the flag - and its ADD event cancels the DEL event no
+	 * matter in which order both events end up in the changes list - or
+	 * the DEL event is not yet queued and nothing has to be canceled
 	 */
 	atomic_or(BATADV_TT_CLIENT_PENDING, &tt_local_entry->common.flags);
+
+	batadv_tt_local_event(bat_priv, tt_local_entry, flags);
 
 	batadv_dbg(BATADV_DBG_TT, bat_priv,
 		   "Local tt entry (%pM, vid: %d) pending to be removed: %s\n",
@@ -1414,6 +1428,22 @@ static void batadv_tt_local_purge_list(struct batadv_priv *bat_priv,
 
 		batadv_tt_local_set_pending(bat_priv, tt_local_entry,
 					    BATADV_TT_CLIENT_DEL, "timed out");
+
+		/* a (lockless) ndo_start_xmit handler might have refreshed
+		 * last_seen between the timeout check above and the setting of
+		 * the PENDING flag - without observing the flag. Re-check and
+		 * revert the pending removal in this case - like a re-add in
+		 * batadv_tt_local_add() would do - to not purge an active
+		 * client
+		 */
+		if (batadv_has_timed_out(tt_local_entry->last_seen, timeout))
+			continue;
+
+		if (atomic_fetch_andnot(BATADV_TT_CLIENT_PENDING,
+					&tt_local_entry->common.flags) &
+		    BATADV_TT_CLIENT_PENDING)
+			batadv_tt_local_event(bat_priv, tt_local_entry,
+					      BATADV_NO_FLAGS);
 	}
 }
 
