@@ -666,16 +666,6 @@ struct batadv_neigh_node {
 	/** @list: list node for &batadv_orig_node.neigh_list */
 	struct hlist_node list;
 
-#ifdef CONFIG_BATMAN_ADV_BATMAN_V
-	/**
-	 * @orig_node_id: pointer to corresponding orig_node. It must only be used
-	 * to identify the node but must NEVER be dereferenced. The reference counter
-	 * was not increased when this was assigned because it would otherwise create
-	 * a reference cycle.
-	 */
-	struct batadv_orig_node *__private orig_node_id;
-#endif
-
 	/** @addr: the MAC address of the neighboring interface */
 	u8 addr[ETH_ALEN];
 

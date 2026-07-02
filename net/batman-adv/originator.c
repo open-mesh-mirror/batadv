@@ -700,10 +700,6 @@ batadv_neigh_node_create(struct batadv_orig_node *orig_node,
 	neigh_node->if_incoming = hard_iface;
 	neigh_node->last_seen = jiffies;
 
-#ifdef CONFIG_BATMAN_ADV_BATMAN_V
-	ACCESS_PRIVATE(neigh_node, orig_node_id) = orig_node;
-#endif
-
 	/* increment unique neighbor refcount */
 	kref_get(&hardif_neigh->refcount);
 	neigh_node->hardif_neigh = hardif_neigh;
