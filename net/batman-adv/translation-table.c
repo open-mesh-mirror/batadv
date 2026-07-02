@@ -3971,6 +3971,17 @@ static void batadv_tt_local_purge_pending_clients(struct batadv_priv *bat_priv)
 			if (!(atomic_read(&tt_common->flags) & BATADV_TT_CLIENT_PENDING))
 				continue;
 
+			/* claim the PENDING flag: a concurrent (lockless)
+			 * ndo_start_xmit handler which claimed it first has
+			 * re-added the client and its compensating ADD event
+			 * canceled the queued DEL event - the entry has to
+			 * stay in the table in this case
+			 */
+			if (!(atomic_fetch_andnot(BATADV_TT_CLIENT_PENDING,
+						  &tt_common->flags) &
+			      BATADV_TT_CLIENT_PENDING))
+				continue;
+
 			batadv_dbg(BATADV_DBG_TT, bat_priv,
 				   "Deleting local tt entry (%pM, vid: %d): pending\n",
 				   tt_common->addr,
