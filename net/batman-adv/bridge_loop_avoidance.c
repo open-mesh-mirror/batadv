@@ -1386,9 +1386,11 @@ void batadv_bla_update_orig_address(struct batadv_priv *bat_priv,
 				    struct batadv_hard_iface *oldif)
 {
 	struct batadv_bla_backbone_gw *backbone_gw;
+	struct hlist_node *removed_node;
 	struct batadv_hashtable *hash;
 	struct hlist_head *head;
 	__be16 group;
+	bool found;
 	int i;
 
 	/* reset bridge loop avoidance group id */
@@ -1409,24 +1411,89 @@ void batadv_bla_update_orig_address(struct batadv_priv *bat_priv,
 	if (!hash)
 		return;
 
-	for (i = 0; i < hash->size; i++) {
-		head = &hash->table[i];
+	/* The orig address is part of the backbone gateway hash key. Each own
+	 * entry therefore has to be taken out of the hash and rehashed under
+	 * the new address - updating the address in place would leave the
+	 * entry in a bucket where lookups for the new address cannot find it,
+	 * and the next processed claim would add a duplicate entry.
+	 */
+	while (true) {
+		found = false;
 
 		rcu_read_lock();
-		hlist_for_each_entry_rcu(backbone_gw, head, hash_entry) {
-			/* own orig still holds the old value. */
-			if (!batadv_compare_eth(backbone_gw->orig,
-						oldif->net_dev->dev_addr))
-				continue;
+		for (i = 0; i < hash->size; i++) {
+			head = &hash->table[i];
 
-			ether_addr_copy(backbone_gw->orig,
-					primary_if->net_dev->dev_addr);
+			hlist_for_each_entry_rcu(backbone_gw, head,
+						 hash_entry) {
+				/* own orig still holds the old value. */
+				if (!batadv_compare_eth(backbone_gw->orig,
+							oldif->net_dev->dev_addr))
+					continue;
+
+				if (!kref_get_unless_zero(&backbone_gw->refcount))
+					continue;
+
+				found = true;
+				break;
+			}
+
+			if (found)
+				break;
+		}
+		rcu_read_unlock();
+
+		if (!found)
+			break;
+
+		removed_node = batadv_hash_remove(hash,
+						  batadv_compare_backbone_gw,
+						  batadv_choose_backbone_gw,
+						  backbone_gw);
+		if (!removed_node) {
+			/* lost against a concurrent purge */
+			batadv_backbone_gw_put(backbone_gw);
+			continue;
+		}
+
+		/* wait until concurrent hash walkers have left the entry
+		 * before changing its key and list membership
+		 */
+		synchronize_rcu();
+
+		ether_addr_copy(backbone_gw->orig,
+				primary_if->net_dev->dev_addr);
+
+		if (batadv_hash_add(hash, batadv_compare_backbone_gw,
+				    batadv_choose_backbone_gw, backbone_gw,
+				    &backbone_gw->hash_entry) != 0) {
+			/* a concurrently processed claim already created the
+			 * entry for the new address - give up the old entry
+			 * and its claims
+			 */
+
+			/* the entry is no longer reachable via the hash, so
+			 * no purge will ever account for a pending request it
+			 * still holds - release it here like the purge path
+			 */
+			spin_lock_bh(&bat_priv->bla.num_requests_lock);
+			if (backbone_gw->state == BATADV_BLA_BACKBONE_GW_UNSYNCED)
+				atomic_dec(&bat_priv->bla.num_requests);
+
+			backbone_gw->state = BATADV_BLA_BACKBONE_GW_STOPPED;
+			spin_unlock_bh(&bat_priv->bla.num_requests_lock);
+
+			batadv_bla_del_backbone_claims(backbone_gw);
+			/* reference of the removed hash entry */
+			batadv_backbone_gw_put(backbone_gw);
+		} else {
 			/* send an announce frame so others will ask for our
 			 * claims and update their tables.
 			 */
 			batadv_bla_send_announce(bat_priv, backbone_gw);
 		}
-		rcu_read_unlock();
+
+		batadv_backbone_gw_put(backbone_gw);
 	}
 }
 
