@@ -10,10 +10,12 @@
 #include "main.h"
 
 #include <linux/atomic.h>
+#include <linux/bottom_half.h>
 #include <linux/compiler.h>
 #include <linux/list.h>
 #include <linux/lockdep.h>
 #include <linux/rculist.h>
+#include <linux/sched.h>
 #include <linux/spinlock.h>
 #include <linux/stddef.h>
 #include <linux/types.h>
@@ -165,6 +167,34 @@ static inline void *batadv_hash_remove(struct batadv_hashtable *hash,
 	spin_unlock_bh(&hash->list_locks[index]);
 
 	return data_save;
+}
+
+/* work which can be done in a hash walk before BH gets re-enabled */
+#define BATADV_HASH_BH_BUDGET 64
+
+/**
+ * batadv_hash_bh_resched() - re-enable BH after the work budget is used up
+ * @buckets_done: buckets processed since BH was disabled, reset when BH is
+ *  re-enabled
+ *
+ * A walk over all buckets of a hash disables BH only once instead of
+ * re-enabling it after each bucket. Otherwise, pending softirqs would be
+ * processed inline after each bucket. When @buckets_done reached
+ * BATADV_HASH_BH_BUDGET, BH is re-enabled to run the pending softirqs and to
+ * give other tasks a chance to run.
+ *
+ * Must be called with BH disabled, without any spinlock held and from a
+ * context which is allowed to sleep.
+ */
+static inline void batadv_hash_bh_resched(u32 *buckets_done)
+{
+	if (*buckets_done < BATADV_HASH_BH_BUDGET)
+		return;
+
+	local_bh_enable();
+	cond_resched();
+	local_bh_disable();
+	*buckets_done = 0;
 }
 
 #endif /* _NET_BATMAN_ADV_HASH_H_ */

@@ -9,6 +9,7 @@
 
 #include <linux/atomic.h>
 #include <linux/bitops.h>
+#include <linux/bottom_half.h>
 #include <linux/bug.h>
 #include <linux/build_bug.h>
 #include <linux/byteorder/generic.h>
@@ -1839,23 +1840,32 @@ static void batadv_tt_local_purge_list(struct batadv_priv *bat_priv,
  * @bat_priv: the bat priv with all the mesh interface information
  * @timeout: parameter deciding whether a given tt local entry is considered
  *  inactive or not
+ * @may_sleep: if true, periodically re-enable softirqs and yield the CPU.
+ *  Must be false when called with spinlocks held.
  */
 static void batadv_tt_local_purge(struct batadv_priv *bat_priv,
-				  int timeout)
+				  int timeout, bool may_sleep)
 {
 	spinlock_t *list_lock; /* protects write access to the hash lists */
 	struct batadv_hashtable *hash = bat_priv->tt.local_hash;
 	struct hlist_head *head;
+	u32 buckets_done = 0;
 	u32 i;
 
+	local_bh_disable();
 	for (i = 0; i < hash->size; i++) {
 		head = &hash->table[i];
 		list_lock = &hash->list_locks[i];
 
-		spin_lock_bh(list_lock);
+		spin_lock(list_lock);
 		batadv_tt_local_purge_list(bat_priv, head, timeout);
-		spin_unlock_bh(list_lock);
+		spin_unlock(list_lock);
+		buckets_done++;
+
+		if (may_sleep)
+			batadv_hash_bh_resched(&buckets_done);
 	}
+	local_bh_enable();
 }
 
 /**
@@ -2834,11 +2844,12 @@ void batadv_tt_global_del_orig(struct batadv_priv *bat_priv,
 	if (!hash)
 		return;
 
+	local_bh_disable();
 	for (i = 0; i < hash->size; i++) {
 		head = &hash->table[i];
 		list_lock = &hash->list_locks[i];
 
-		spin_lock_bh(list_lock);
+		spin_lock(list_lock);
 		hlist_for_each_entry_safe(tt_common_entry, safe,
 					  head, hash_entry) {
 			/* remove only matching entries */
@@ -2863,8 +2874,9 @@ void batadv_tt_global_del_orig(struct batadv_priv *bat_priv,
 				batadv_tt_global_entry_put(tt_global);
 			}
 		}
-		spin_unlock_bh(list_lock);
+		spin_unlock(list_lock);
 	}
+	local_bh_enable();
 	clear_bit(BATADV_ORIG_CAPA_HAS_TT, &orig_node->capa_initialized);
 }
 
@@ -2916,14 +2928,16 @@ static void batadv_tt_global_purge(struct batadv_priv *bat_priv)
 	struct batadv_tt_global_entry *tt_global;
 	struct hlist_node *node_tmp;
 	struct hlist_head *head;
+	u32 buckets_done = 0;
 	char *msg = NULL;
 	u32 i;
 
+	local_bh_disable();
 	for (i = 0; i < hash->size; i++) {
 		head = &hash->table[i];
 		list_lock = &hash->list_locks[i];
 
-		spin_lock_bh(list_lock);
+		spin_lock(list_lock);
 		hlist_for_each_entry_safe(tt_common, node_tmp, head,
 					  hash_entry) {
 			tt_global = container_of(tt_common,
@@ -2943,8 +2957,12 @@ static void batadv_tt_global_purge(struct batadv_priv *bat_priv)
 
 			batadv_tt_global_entry_put(tt_global);
 		}
-		spin_unlock_bh(list_lock);
+		spin_unlock(list_lock);
+		buckets_done++;
+
+		batadv_hash_bh_resched(&buckets_done);
 	}
+	local_bh_enable();
 }
 
 /**
@@ -4349,7 +4367,7 @@ static void batadv_tt_purge(struct work_struct *work)
 	priv_tt = container_of(delayed_work, struct batadv_priv_tt, work);
 	bat_priv = container_of(priv_tt, struct batadv_priv, tt);
 
-	batadv_tt_local_purge(bat_priv, BATADV_TT_LOCAL_TIMEOUT);
+	batadv_tt_local_purge(bat_priv, BATADV_TT_LOCAL_TIMEOUT, true);
 	batadv_tt_global_purge(bat_priv);
 	batadv_tt_req_purge(bat_priv);
 	batadv_tt_roam_purge(bat_priv);
@@ -4396,11 +4414,12 @@ static void batadv_tt_local_transition_new(struct batadv_priv *bat_priv)
 	if (!hash)
 		return;
 
+	local_bh_disable();
 	for (i = 0; i < hash->size; i++) {
 		head = &hash->table[i];
 		list_lock = &hash->list_locks[i];
 
-		spin_lock_bh(list_lock);
+		spin_lock(list_lock);
 		hlist_for_each_entry(tt_common_entry, head, hash_entry) {
 			bool cont = false;
 
@@ -4419,8 +4438,9 @@ static void batadv_tt_local_transition_new(struct batadv_priv *bat_priv)
 			batadv_tt_local_size_inc(bat_priv,
 						 tt_common_entry->key.vid);
 		}
-		spin_unlock_bh(list_lock);
+		spin_unlock(list_lock);
 	}
+	local_bh_enable();
 }
 
 /**
@@ -4444,11 +4464,12 @@ static void batadv_tt_local_purge_pending_clients(struct batadv_priv *bat_priv)
 	if (!hash)
 		return;
 
+	local_bh_disable();
 	for (i = 0; i < hash->size; i++) {
 		head = &hash->table[i];
 		list_lock = &hash->list_locks[i];
 
-		spin_lock_bh(list_lock);
+		spin_lock(list_lock);
 		hlist_for_each_entry_safe(tt_common, node_tmp, head,
 					  hash_entry) {
 			bool cont = false;
@@ -4483,8 +4504,9 @@ static void batadv_tt_local_purge_pending_clients(struct batadv_priv *bat_priv)
 
 			batadv_tt_local_entry_put(tt_local);
 		}
-		spin_unlock_bh(list_lock);
+		spin_unlock(list_lock);
 	}
+	local_bh_enable();
 }
 
 /**
@@ -4786,7 +4808,7 @@ void batadv_tt_local_resize_to_mtu(struct net_device *mesh_iface)
 		if (size_max >= table_size)
 			break;
 
-		batadv_tt_local_purge(bat_priv, timeout);
+		batadv_tt_local_purge(bat_priv, timeout, false);
 		batadv_tt_local_purge_pending_clients(bat_priv);
 
 		timeout /= 2;
